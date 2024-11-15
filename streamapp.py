@@ -8,6 +8,7 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import os
 import PyPDF2
 from dotenv import load_dotenv
+import distutils.core
 
 # Load environment variables from .env file
 load_dotenv()
