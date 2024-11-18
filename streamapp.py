@@ -3,26 +3,50 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import torch
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import os
 import PyPDF2
 from dotenv import load_dotenv
-import distutils.core
+import google.generativeai as genai
 
 # Load environment variables from .env file
 load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background-color: #B7CD7A;
-        font-family: 'Arial', sans-serif;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
+# Gemini model configuration
+generation_config = {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 64,
+    "max_output_tokens": 8192,
+    "response_mime_type": "text/plain",
+}
+
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    generation_config=generation_config,
+    system_instruction=(
+        "Definition\nCulture fit assessment refers to the evaluation of how well a candidate's stated values, preferences, "
+        "and expectations align with the cultural aspects of a job description. This involves comparing the explicit "
+        "statements made by the candidate in their application materials with the cultural attributes and expectations "
+        "described in the job description.\n\n"
+        "Identification and Extraction\n"
+        "Analyze both the job description and the candidate's provided documents (resume, cover letter, application forms, etc.) "
+        "to identify explicit statements about the following categories:\n"
+        "Company Culture: Policy, goals, practices, core values, mission, vision, strategy.\n"
+        "Team Dynamics: Working style, people, communication, collaboration.\n"
+        "Work Environment: Physical space, remote work, office setup, flexibility.\n"
+        "Personal Values: Integrity, work-life balance, learning, growth, innovation.\n"
+        "Management Style: Leadership, decision-making, feedback, support.\n"
+        "Diversity & Inclusion: Inclusion practices, non-discrimination, equity, representation.\n\n"
+        "Output Format\n"
+        "For each identified value or cultural expectation, provide the following:\n"
+        "- Category (e.g., Company Culture, Team Dynamics, etc.)\n"
+        "- Statement: A direct quote or close paraphrase of the candidate's stated preference or value.\n"
+        "- Source: The specific document and section where this information was found.\n"
+        "- Context: A brief description of the surrounding context in which this statement was made.\n"
+        "- Relevance Score: (1-5, where 5 is highly emphasized or frequently mentioned, and 1 is briefly mentioned)\n"
+        "Only include explicitly stated preferences and values. Do not infer or assume values that are not directly expressed."
+    ),
 )
 
 # Load the BERT model for Cosine Similarity
@@ -30,15 +54,7 @@ st.markdown(
 def load_embedding_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
 
-# Load the GPT-2 model and tokenizer from Hugging Face
-@st.cache_resource
-def load_gpt2_model():
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    model = GPT2LMHeadModel.from_pretrained("gpt2")
-    return tokenizer, model
-
 embedding_model = load_embedding_model()
-tokenizer, gpt2_model = load_gpt2_model()
 
 # Functions for Cosine Similarity Calculations
 def calculate_culture_fit_score(job_desc, resume_text, behavioral_answers):
@@ -55,68 +71,22 @@ def calculate_culture_fit_score(job_desc, resume_text, behavioral_answers):
     
     return culture_fit_score, reasoning
 
-# GPT-2 Text Generation for Culture Fit Assessment
-def generate_gpt2_assessment(job_description, resume_text, behavioral_answers):
-    system_instructions = (
-        "Definition\n"
-        "Culture fit assessment refers to the evaluation of how well a candidate's stated values, preferences, "
-        "and expectations align with the cultural aspects of a job description. This involves comparing the explicit "
-        "statements made by the candidate in their application materials with the cultural attributes and expectations "
-        "described in the job description.\n\n"
-        
-        "Identification and Extraction\n"
-        "Analyze both the job description and the candidate's provided documents (resume, cover letter, application forms, etc.) "
-        "to identify explicit statements about the following categories:\n"
-        "Company Culture: Policy, goals, practices, core values, mission, vision, strategy.\n"
-        "Team Dynamics: Working style, people, communication, collaboration.\n"
-        "Work Environment: Physical space, remote work, office setup, flexibility.\n"
-        "Personal Values: Integrity, work-life balance, learning, growth, innovation.\n"
-        "Management Style: Leadership, decision-making, feedback, support.\n"
-        "Diversity & Inclusion: Inclusion practices, non-discrimination, equity, representation.\n\n"
-        
-        "Output Format\n"
-        "For each identified value or cultural expectation, provide the following:\n"
-        "- Category (e.g., Company Culture, Team Dynamics, etc.)\n"
-        "- Statement: A direct quote or close paraphrase of the candidate's stated preference or value.\n"
-        "- Source: The specific document and section where this information was found.\n"
-        "- Context: A brief description of the surrounding context in which this statement was made.\n"
-        "- Relevance Score: (1-5, where 5 is highly emphasized or frequently mentioned, and 1 is briefly mentioned)\n"
-        
-        "Scoring System\n"
-        "Best Fit (4-5): Strong alignment\n"
-        "Average Fit (2-3): Some alignment with areas needing improvement\n"
-        "Poor Fit (1): Misalignment\n\n"
-        
-        "Additional Instructions\n"
-        "Only include explicitly stated preferences and values. Do not infer or assume values that are not directly expressed."
+# Gemini API-based Culture Fit Assessment
+def generate_gemini_assessment(job_description, resume_text, behavioral_answers):
+    chat_session = model.start_chat(
+        history=[
+            {
+                "role": "user",
+                "parts": [
+                    f"Job Description: {job_description}\n\n"
+                    f"Resume: {resume_text}\n\n"
+                    f"Behavioral Answers: {' '.join(behavioral_answers)}"
+                ],
+            }
+        ]
     )
-
-    # Truncate each input section to fit within GPT-2’s 1024-token limit
-    truncated_job_description = job_description[:500]
-    truncated_resume_text = resume_text[:500]
-    truncated_behavioral_answers = "\n".join(behavioral_answers[:2])[:500]
-
-    model_input = (
-        f"{system_instructions}\n\n"
-        f"Job Description:\n{truncated_job_description}\n\n"
-        f"Resume:\n{truncated_resume_text}\n\n"
-        f"Behavioral Answers:\n{truncated_behavioral_answers}\n\n"
-        "Analyze the candidate's culture fit based on the provided information:"
-    )
-
-    # Tokenize with truncation to ensure it stays within bounds
-    inputs = tokenizer(model_input, return_tensors="pt", truncation=True, max_length=1024)
-    outputs = gpt2_model.generate(
-        **inputs,
-        max_new_tokens=150,  # Limit the output length
-        num_return_sequences=1,
-        temperature=0.7,
-        top_p=0.9,
-        do_sample=True
-    )
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return response
-
+    response = chat_session.send_message("Analyze the candidate's culture fit based on the provided information.")
+    return response.text
 
 # PDF Text Extraction
 def extract_text_from_pdf(file):
@@ -132,7 +102,7 @@ st.title("Culture Fit Assessment Tool")
 
 # Sidebar for file upload and model selection
 st.sidebar.title("Input Data and Model Selection")
-model_choice = st.sidebar.radio("Choose Model", ["Cosine Similarity (BERT Model)", "GPT-2 Model"])
+model_choice = st.sidebar.radio("Choose Model", ["Cosine Similarity (BERT Model)", "Gemini API Model"])
 
 # Display text input fields
 job_description = st.text_area("Enter the Job Description")
@@ -158,10 +128,10 @@ if st.button("Calculate Culture Fit"):
             st.write(f"Reasoning: {reasoning}")
         else:
             st.error("Please fill in all fields to proceed.")
-    elif model_choice == "GPT-2 Model":
+    elif model_choice == "Gemini API Model":
         if job_description and resume_text:
-            response = generate_gpt2_assessment(job_description, resume_text, behavioral_answers[:2])
-            st.subheader("GPT-2 Model Culture Fit Assessment")
+            response = generate_gemini_assessment(job_description, resume_text, behavioral_answers)
+            st.subheader("Gemini API Model Culture Fit Assessment")
             st.write(response)
         else:
             st.error("Please fill in all fields to proceed.")
